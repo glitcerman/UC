@@ -80,6 +80,9 @@ private:
 
             case NodeType::CALL_EXPR: {
                 auto* n = static_cast<CallExpr*>(node);
+
+                if (n->callee == "print") return "void";
+
                 if (functions.find(n->callee) == functions.end())
                     error("undefined function '" + n->callee + "'", n->line, n->column);
 
@@ -237,7 +240,8 @@ public:
         auto* prog = static_cast<Program*>(program);
 
         // Fonctions built-in
-        functions["print"] = { "void", { "int" } }; // <- NOUVEAU
+        functions["print"] = { "void", { "int" } };
+        functions["input"] = { "int", {} }; // <- NOUVEAU : pas de paramètres, retourne un int
 
         // Première passe : enregistre toutes les fonctions
         for (auto& decl : prog->declarations) {

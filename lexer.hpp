@@ -8,7 +8,7 @@
 // Tous les types de tokens possibles en UC
 enum class TokenType {
     // Mots-clés
-    FUNC, VAR, RETURN, IF, ELSE, FOR, WHILE, PRINT,
+    FUNC, VAR, RETURN, IF, ELSE, FOR, WHILE, PRINT, INPUT,
 
     // Types
     TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_BOOL,

@@ -61,6 +61,25 @@ private:
                 return t;
             }
 
+            case NodeType::STRING_LITERAL: {
+                auto* n = static_cast<StringLiteral*>(node);
+                std::string str = n->value + "\n";
+                int len = (int)str.size() + 1; // +1 pour \00
+                std::string fmt = newTemp();
+                std::string fmtPtr = newTemp();
+
+                std::string lenStr = std::to_string(len);
+
+                output << "  " << fmt << " = alloca [" << lenStr << " x i8]\n";
+                output << "  store [" << lenStr << " x i8] c\""
+                    << n->value << "\\n\\00\", [" << lenStr << " x i8]* " << fmt << "\n";
+                output << "  " << fmtPtr << " = getelementptr ["
+                    << lenStr << " x i8], [" << lenStr << " x i8]* "
+                    << fmt << ", i32 0, i32 0\n";
+
+                return fmtPtr;
+            }
+
             case NodeType::IDENT: {
                 auto* n = static_cast<Ident*>(node);
                 std::string t = newTemp();
@@ -107,28 +126,67 @@ private:
                 // Cas spécial : print()
                 if (n->callee == "print") {
                     for (auto& arg : n->args) {
-                        std::string val = genExpr(arg.get());
-                        std::string fmt = newTemp();
-                        std::string fmtPtr = newTemp();
+                        // Cas spécial : string littérale
+                        if (arg->type == NodeType::STRING_LITERAL) {
+                            auto* s = static_cast<StringLiteral*>(arg.get());
+                            int len = (int)s->value.size() + 2; // \n compte pour 2 chars + \00
+                            std::string lenStr = std::to_string(len);
+                            std::string fmt = newTemp();
+                            std::string fmtPtr = newTemp();
 
-                        output << "  " << fmt << " = alloca [4 x i8]\n";
-                        output << "  store [4 x i8] c\"%d\\0A\\00\", [4 x i8]* " << fmt << "\n";
-                        output << "  " << fmtPtr << " = getelementptr [4 x i8], [4 x i8]* "
-                               << fmt << ", i32 0, i32 0\n";
-                        output << "  call i32 (i8*, ...) @printf(i8* " << fmtPtr
-                               << ", i32 " << val << ")\n";
+                            output << "  " << fmt << " = alloca [" << lenStr << " x i8]\n";
+                            output << "  store [" << lenStr << " x i8] c\""
+                               << s->value << "\\0A\\00\", [" << lenStr << " x i8]* " << fmt << "\n";
+                            output << "  " << fmtPtr << " = getelementptr ["
+                                << lenStr << " x i8], [" << lenStr << " x i8]* "
+                                << fmt << ", i32 0, i32 0\n";
+                            output << "  call i32 (i8*, ...) @printf(i8* " << fmtPtr << ")\n";
+                        }
+                        // Cas normal : int
+                        else {
+                            std::string val = genExpr(arg.get());
+                            std::string fmt = newTemp();
+                            std::string fmtPtr = newTemp();
+
+                            output << "  " << fmt << " = alloca [4 x i8]\n";
+                            output << "  store [4 x i8] c\"%d\\0A\\00\", [4 x i8]* " << fmt << "\n";
+                            output << "  " << fmtPtr << " = getelementptr [4 x i8], [4 x i8]* "
+                                << fmt << ", i32 0, i32 0\n";
+                            output << "  call i32 (i8*, ...) @printf(i8* " << fmtPtr
+                                << ", i32 " << val << ")\n";
+                        }
                     }
                     std::string t = newTemp();
                     output << "  " << t << " = add i32 0, 0\n";
                     return t;
-                }
+                }                
 
-                std::vector<std::string> argRegs;
-                for (auto& arg : n->args)
-                    argRegs.push_back(genExpr(arg.get()));
+                // Cas spécial : input()
+                if (n->callee == "input") {
+                    std::string var = newTemp();
+                    std::string fmt = newTemp();
+                    std::string fmtPtr = newTemp();
 
-                std::string t = newTemp();
-                output << "  " << t << " = call i32 @" << n->callee << "(";
+                    output << "  " << var << " = alloca i32\n";
+                    output << "  " << fmt << " = alloca [3 x i8]\n";
+                    output << "  store [3 x i8] c\"%d\\00\", [3 x i8]* " << fmt << "\n";
+                    output << "  " << fmtPtr << " = getelementptr [3 x i8], [3 x i8]* "
+                        << fmt << ", i32 0, i32 0\n";
+                    output << "  call i32 (i8*, ...) @scanf(i8* " << fmtPtr
+                    << ", i32* " << var << ")\n";
+
+                    std::string result = newTemp();
+                    output << "  " << result << " = load i32, i32* " << var << "\n";
+                    return result;
+                    }
+
+                    // Appel de fonction normal
+                    std::vector<std::string> argRegs;
+                    for (auto& arg : n->args)
+                        argRegs.push_back(genExpr(arg.get()));
+
+                    std::string t = newTemp();
+                    output << "  " << t << " = call i32 @" << n->callee << "(";
 
                 for (int i = 0; i < argRegs.size(); i++) {
                     output << "i32 " << argRegs[i];
@@ -251,10 +309,11 @@ private:
                 break;
             }
 
-            case NodeType::CALL_EXPR:
+            case NodeType::CALL_EXPR: {
+                auto* n = static_cast<CallExpr*>(node);
                 genExpr(node);
                 break;
-
+            }
             default:
                 break;
         }
@@ -267,11 +326,9 @@ private:
     }
 
     // --- Génération des fonctions ---
-
     void genFuncDecl(FuncDecl* func) {
         varRegs.clear();
 
-        // Signature de la fonction
         output << "define i32 @" << func->name << "(";
 
         for (int i = 0; i < func->params.size(); i++) {
@@ -282,7 +339,6 @@ private:
         output << ") {\n";
         output << "entry:\n";
 
-        // Alloue et stocke les paramètres
         for (auto& param : func->params) {
             std::string reg = "%" + param.name + "_addr";
             output << "  " << reg << " = alloca i32\n";
@@ -291,6 +347,9 @@ private:
         }
 
         genBlock(func->body.get());
+
+        // Ajoute un ret par défaut si la fonction ne retourne rien
+        output << "  ret i32 0\n";
 
         output << "}\n\n";
     }
@@ -303,7 +362,8 @@ public:
         output << "; UC Compiler — generated LLVM IR\n\n";
 
         // Déclaration de printf pour print()
-        output << "declare i32 @printf(i8*, ...)\n\n";
+        output << "declare i32 @printf(i8*, ...)\n";
+        output << "declare i32 @scanf(i8*, ...)\n"; // <- NOUVEAU
 
         for (auto& decl : prog->declarations) {
             if (decl->type == NodeType::FUNC_DECL)

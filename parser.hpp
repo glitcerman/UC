@@ -93,6 +93,14 @@ private:
                 return std::make_unique<CallExpr>(t.value, std::move(args), t.line, t.column);
             }
 
+            // input() utilisé comme expression
+            if (check(TokenType::INPUT)) {
+                Token t = advance();
+                expect(TokenType::LPAREN, "expected '('");
+                expect(TokenType::RPAREN, "expected ')'");
+                return std::make_unique<CallExpr>("input", std::vector<NodePtr>(), t.line, t.column);
+            }
+
             // Simple identifiant
             return std::make_unique<Ident>(t.value, t.line, t.column);
         }
@@ -276,6 +284,7 @@ private:
         if (check(TokenType::FOR))    return parseFor();
         if (check(TokenType::VAR))    return parseVarDecl();
         if (check(TokenType::PRINT))  return parsePrint(); // <- NOUVEAU
+        if (check(TokenType::INPUT))  return parseInput(); // <- NOUVEAU
 
         // Assignation ou appel de fonction
         if (check(TokenType::IDENT) && peek().type == TokenType::ASSIGN)
@@ -338,6 +347,15 @@ public:
 
         return std::make_unique<Program>(std::move(declarations), 1, 1);
     }
+
+    // input()
+    NodePtr parseInput() {
+        Token t = advance(); // consomme 'input'
+        expect(TokenType::LPAREN, "expected '(' after 'input'");
+        expect(TokenType::RPAREN, "expected ')' after '('");
+        return std::make_unique<CallExpr>("input", std::vector<NodePtr>(), t.line, t.column);
+    }
+
     // print(<expr>)
     NodePtr parsePrint() {
         Token t = advance(); // consomme 'print'
