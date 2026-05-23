@@ -1,0 +1,2 @@
+Next changes :
+  - Add a VS Code extention to the marketplace
