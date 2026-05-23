@@ -4,30 +4,32 @@
 #include <vector>
 #include <memory>
 
-// On utilise des smart pointers pour éviter les fuites mémoire
-// unique_ptr = un seul propriétaire, libéré automatiquement
 using NodePtr = std::unique_ptr<struct Node>;
 
-// Type de chaque noeud de l'AST
 enum class NodeType {
     // Déclarations
-    PROGRAM,        // le programme entier
-    FUNC_DECL,      // func add(int a, int b) { ... }
-    VAR_DECL,       // var x = 42
-    PARAM,          // int a (paramètre de fonction)
+    PROGRAM,
+    FUNC_DECL,
+    VAR_DECL,
+    PARAM,
+    CLASS_DECL,     // class Animal { ... }
+    METHOD_DECL,    // méthode dans une classe
 
     // Instructions
-    RETURN_STMT,    // return a + b
-    IF_STMT,        // if x > 0 { ... }
-    WHILE_STMT,     // while x > 0 { ... }
-    FOR_STMT,       // for ... { ... }
-    BLOCK,          // { ... }
+    RETURN_STMT,
+    IF_STMT,
+    WHILE_STMT,
+    FOR_STMT,
+    BLOCK,
+    OBJECT_DECL,    // Animal a(5)
 
     // Expressions
-    BINARY_EXPR,    // a + b, x == y ...
-    UNARY_EXPR,     // -x, !b
-    CALL_EXPR,      // add(1, 2)
-    ASSIGN_EXPR,    // x = 42
+    BINARY_EXPR,
+    UNARY_EXPR,
+    CALL_EXPR,
+    ASSIGN_EXPR,
+    MEMBER_ACCESS,  // a:method() ou a:field
+    MEMBER_ASSIGN,  // a:field = value
 
     // Littéraux et identifiants
     INT_LITERAL,
@@ -37,7 +39,6 @@ enum class NodeType {
     IDENT
 };
 
-// Noeud de base dont tous les autres héritent
 struct Node {
     NodeType type;
     int line, column;
@@ -74,8 +75,6 @@ struct BoolLiteral : Node {
         : Node(NodeType::BOOL_LITERAL, line, col), value(value) {}
 };
 
-// --- Identifiant ---
-
 struct Ident : Node {
     std::string name;
     Ident(const std::string& name, int line, int col)
@@ -85,7 +84,7 @@ struct Ident : Node {
 // --- Expressions ---
 
 struct BinaryExpr : Node {
-    std::string op;   // "+", "-", "==", "<" ...
+    std::string op;
     NodePtr left;
     NodePtr right;
 
@@ -95,7 +94,7 @@ struct BinaryExpr : Node {
 };
 
 struct UnaryExpr : Node {
-    std::string op;   // "-" ou "!"
+    std::string op;
     NodePtr operand;
 
     UnaryExpr(const std::string& op, NodePtr operand, int line, int col)
@@ -104,8 +103,8 @@ struct UnaryExpr : Node {
 };
 
 struct CallExpr : Node {
-    std::string callee;               // nom de la fonction appelée
-    std::vector<NodePtr> args;        // arguments
+    std::string callee;
+    std::vector<NodePtr> args;
 
     CallExpr(const std::string& callee, std::vector<NodePtr> args, int line, int col)
         : Node(NodeType::CALL_EXPR, line, col), callee(callee),
@@ -113,11 +112,36 @@ struct CallExpr : Node {
 };
 
 struct AssignExpr : Node {
-    std::string name;   // variable cible
+    std::string name;
     NodePtr value;
 
     AssignExpr(const std::string& name, NodePtr value, int line, int col)
         : Node(NodeType::ASSIGN_EXPR, line, col), name(name),
+          value(std::move(value)) {}
+};
+
+// a:method(args) ou a:field
+struct MemberAccess : Node {
+    std::string object;     // nom de l'objet : "a"
+    std::string member;     // nom du membre : "speak"
+    std::vector<NodePtr> args;  // arguments si c'est un appel de méthode
+    bool isCall;            // true si appel de méthode, false si accès champ
+
+    MemberAccess(const std::string& object, const std::string& member,
+                 std::vector<NodePtr> args, bool isCall, int line, int col)
+        : Node(NodeType::MEMBER_ACCESS, line, col), object(object), member(member),
+          args(std::move(args)), isCall(isCall) {}
+};
+
+// a:field = value
+struct MemberAssign : Node {
+    std::string object;
+    std::string member;
+    NodePtr value;
+
+    MemberAssign(const std::string& object, const std::string& member,
+                 NodePtr value, int line, int col)
+        : Node(NodeType::MEMBER_ASSIGN, line, col), object(object), member(member),
           value(std::move(value)) {}
 };
 
@@ -132,7 +156,7 @@ struct Block : Node {
 };
 
 struct ReturnStmt : Node {
-    NodePtr value;   // peut être nullptr si pas de valeur
+    NodePtr value;
 
     ReturnStmt(NodePtr value, int line, int col)
         : Node(NodeType::RETURN_STMT, line, col), value(std::move(value)) {}
@@ -141,7 +165,7 @@ struct ReturnStmt : Node {
 struct IfStmt : Node {
     NodePtr condition;
     NodePtr thenBlock;
-    NodePtr elseBlock;   // peut être nullptr si pas de else
+    NodePtr elseBlock;
 
     IfStmt(NodePtr condition, NodePtr thenBlock, NodePtr elseBlock, int line, int col)
         : Node(NodeType::IF_STMT, line, col), condition(std::move(condition)),
@@ -158,9 +182,9 @@ struct WhileStmt : Node {
 };
 
 struct ForStmt : Node {
-    NodePtr init;       // var i = 0
-    NodePtr condition;  // i < 10
-    NodePtr increment;  // i = i + 1
+    NodePtr init;
+    NodePtr condition;
+    NodePtr increment;
     NodePtr body;
 
     ForStmt(NodePtr init, NodePtr condition, NodePtr increment, NodePtr body, int line, int col)
@@ -172,7 +196,7 @@ struct ForStmt : Node {
 // --- Déclarations ---
 
 struct Param : Node {
-    std::string typeName;   // "int", "float"...
+    std::string typeName;
     std::string name;
 
     Param(const std::string& typeName, const std::string& name, int line, int col)
@@ -181,8 +205,8 @@ struct Param : Node {
 
 struct VarDecl : Node {
     std::string name;
-    NodePtr value;           // valeur initiale
-    std::string typeName;    // vide si inféré
+    NodePtr value;
+    std::string typeName;
 
     VarDecl(const std::string& name, NodePtr value, const std::string& typeName, int line, int col)
         : Node(NodeType::VAR_DECL, line, col), name(name),
@@ -193,7 +217,7 @@ struct FuncDecl : Node {
     std::string name;
     std::vector<Param> params;
     NodePtr body;
-    std::string returnType;   // vide si inféré
+    std::string returnType;
 
     FuncDecl(const std::string& name, std::vector<Param> params,
              NodePtr body, const std::string& returnType, int line, int col)
@@ -201,7 +225,71 @@ struct FuncDecl : Node {
           body(std::move(body)), returnType(returnType) {}
 };
 
-// Le programme entier = une liste de déclarations
+// Méthode d'une classe (comme FuncDecl mais avec className)
+struct MethodDecl : Node {
+    std::string className;
+    std::string name;
+    std::vector<Param> params;
+    NodePtr body;
+    std::string returnType;
+    bool isPublic;
+
+    MethodDecl(const std::string& className, const std::string& name,
+               std::vector<Param> params, NodePtr body,
+               const std::string& returnType, bool isPublic, int line, int col)
+        : Node(NodeType::METHOD_DECL, line, col), className(className), name(name),
+          params(std::move(params)), body(std::move(body)),
+          returnType(returnType), isPublic(isPublic) {}
+};
+
+// Champ d'une classe
+struct FieldDecl {
+    std::string name;
+    NodePtr defaultValue;
+    bool isPublic;
+
+    FieldDecl(const std::string& name, NodePtr defaultValue, bool isPublic)
+        : name(name), defaultValue(std::move(defaultValue)), isPublic(isPublic) {}
+};
+
+// Constructeur d'une classe
+struct ConstructorDecl {
+    std::vector<Param> params;
+    std::vector<std::pair<std::string, std::string>> assignments; // field -> param
+    NodePtr body;
+
+    ConstructorDecl(std::vector<Param> params,
+                    std::vector<std::pair<std::string, std::string>> assignments,
+                    NodePtr body)
+        : params(std::move(params)), assignments(std::move(assignments)),
+          body(std::move(body)) {}
+};
+
+// Déclaration d'une classe
+struct ClassDecl : Node {
+    std::string name;
+    std::string parent;           // nom de la classe parente, vide si aucune
+    std::vector<FieldDecl> fields;
+    std::vector<std::unique_ptr<MethodDecl>> methods;
+    std::unique_ptr<ConstructorDecl> constructor;
+
+    ClassDecl(const std::string& name, const std::string& parent, int line, int col)
+        : Node(NodeType::CLASS_DECL, line, col), name(name), parent(parent) {}
+};
+
+// Instanciation d'un objet : Animal a(5)
+struct ObjectDecl : Node {
+    std::string className;
+    std::string varName;
+    std::vector<NodePtr> args;
+
+    ObjectDecl(const std::string& className, const std::string& varName,
+               std::vector<NodePtr> args, int line, int col)
+        : Node(NodeType::OBJECT_DECL, line, col), className(className),
+          varName(varName), args(std::move(args)) {}
+};
+
+// Le programme entier
 struct Program : Node {
     std::vector<NodePtr> declarations;
 

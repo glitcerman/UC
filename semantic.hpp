@@ -2,37 +2,40 @@
 #pragma once
 #include "ast.hpp"
 #include <unordered_map>
-#include <unordered_set>
 #include <stdexcept>
 
-// Représente une variable connue du compilateur
 struct VarInfo {
-    std::string typeName;  // "int", "float", "string", "bool", ou "" si pas encore résolu
+    std::string typeName;
 };
 
-// Représente une fonction connue du compilateur
 struct FuncInfo {
     std::string returnType;
     std::vector<std::string> paramTypes;
 };
 
+struct FieldInfo {
+    std::string typeName;
+    bool isPublic;
+};
+
+struct ClassInfo {
+    std::string parent;
+    std::unordered_map<std::string, FieldInfo> fields;
+    std::unordered_map<std::string, FuncInfo> methods;
+};
+
 class SemanticAnalyzer {
 private:
-    // Table des variables : nom -> info
     std::unordered_map<std::string, VarInfo> variables;
-
-    // Table des fonctions : nom -> info
     std::unordered_map<std::string, FuncInfo> functions;
+    std::unordered_map<std::string, ClassInfo> classes;
+    std::unordered_map<std::string, std::string> objectTypes; // varName -> className
 
-    // Erreur sémantique
     void error(const std::string& msg, int line, int col) {
         throw std::runtime_error("UC Semantic Error at line " +
             std::to_string(line) + ", column " + std::to_string(col) + ": " + msg);
     }
 
-    // --- Inférence de type ---
-
-    // Déduit le type d'une expression
     std::string inferType(Node* node) {
         if (!node) return "void";
 
@@ -53,18 +56,12 @@ private:
                 auto* n = static_cast<BinaryExpr*>(node);
                 std::string left  = inferType(n->left.get());
                 std::string right = inferType(n->right.get());
-
-                // Comparaisons retournent toujours un bool
-                if (n->op == "==" || n->op == "!=" ||
-                    n->op == "<"  || n->op == ">"  ||
-                    n->op == "<=" || n->op == ">=")
+                if (n->op == "==" || n->op == "!=" || n->op == "<" ||
+                    n->op == ">"  || n->op == "<=" || n->op == ">=")
                     return "bool";
-
-                // Les deux côtés doivent avoir le même type
                 if (left != right)
-                    error("type mismatch in expression: '" + left +
-                          "' and '" + right + "'", n->line, n->column);
-
+                    error("type mismatch: '" + left + "' and '" + right + "'",
+                          n->line, n->column);
                 return left;
             }
 
@@ -80,38 +77,38 @@ private:
 
             case NodeType::CALL_EXPR: {
                 auto* n = static_cast<CallExpr*>(node);
-
                 if (n->callee == "print") return "void";
-
+                if (n->callee == "input") return "int";
                 if (functions.find(n->callee) == functions.end())
                     error("undefined function '" + n->callee + "'", n->line, n->column);
+                return functions[n->callee].returnType;
+            }
 
-                FuncInfo& func = functions[n->callee];
-
-                // Vérification du nombre d'arguments
-                if (n->args.size() != func.paramTypes.size())
-                    error("function '" + n->callee + "' expects " +
-                          std::to_string(func.paramTypes.size()) + " argument(s), got " +
-                          std::to_string(n->args.size()), n->line, n->column);
-
-                // Vérification des types des arguments
-                for (int i = 0; i < n->args.size(); i++) {
-                    std::string argType = inferType(n->args[i].get());
-                    if (argType != func.paramTypes[i])
-                        error("argument " + std::to_string(i + 1) + " of '" + n->callee +
-                              "' expects '" + func.paramTypes[i] + "', got '" + argType + "'",
+            case NodeType::MEMBER_ACCESS: {
+                auto* n = static_cast<MemberAccess*>(node);
+                if (objectTypes.find(n->object) == objectTypes.end())
+                    error("undefined object '" + n->object + "'", n->line, n->column);
+                std::string className = objectTypes[n->object];
+                if (classes.find(className) == classes.end())
+                    error("undefined class '" + className + "'", n->line, n->column);
+                auto& cls = classes[className];
+                if (n->isCall) {
+                    if (cls.methods.find(n->member) == cls.methods.end())
+                        error("undefined method '" + n->member + "' in class '" + className + "'",
                               n->line, n->column);
+                    return cls.methods[n->member].returnType;
+                } else {
+                    if (cls.fields.find(n->member) == cls.fields.end())
+                        error("undefined field '" + n->member + "' in class '" + className + "'",
+                              n->line, n->column);
+                    return cls.fields[n->member].typeName;
                 }
-
-                return func.returnType;
             }
 
             default:
                 return "";
         }
     }
-
-    // --- Analyse des instructions ---
 
     void analyzeStatement(Node* node, std::string& inferredReturn) {
         if (!node) return;
@@ -125,55 +122,48 @@ private:
                 break;
             }
 
+            case NodeType::OBJECT_DECL: {
+                auto* n = static_cast<ObjectDecl*>(node);
+                if (classes.find(n->className) == classes.end())
+                    error("undefined class '" + n->className + "'", n->line, n->column);
+                objectTypes[n->varName] = n->className;
+                variables[n->varName] = { n->className };
+                break;
+            }
+
             case NodeType::ASSIGN_EXPR: {
                 auto* n = static_cast<AssignExpr*>(node);
                 if (variables.find(n->name) == variables.end())
                     error("undefined variable '" + n->name + "'", n->line, n->column);
+                break;
+            }
 
-                std::string newType = inferType(n->value.get());
-                std::string oldType = variables[n->name].typeName;
-
-                if (oldType != newType)
-                    error("cannot assign '" + newType + "' to variable '" +
-                          n->name + "' of type '" + oldType + "'", n->line, n->column);
+            case NodeType::MEMBER_ASSIGN: {
+                auto* n = static_cast<MemberAssign*>(node);
+                if (objectTypes.find(n->object) == objectTypes.end())
+                    error("undefined object '" + n->object + "'", n->line, n->column);
                 break;
             }
 
             case NodeType::RETURN_STMT: {
                 auto* n = static_cast<ReturnStmt*>(node);
                 std::string t = inferType(n->value.get());
-
-                // Premier return rencontré → on note le type
-                if (inferredReturn.empty()) {
-                    inferredReturn = t;
-                }
-                // Return suivant → doit avoir le même type
-                else if (inferredReturn != t) {
-                    error("ambiguous return type: '" + inferredReturn +
-                          "' and '" + t + "' — please specify return type with '->'",
-                          n->line, n->column);
-                }
+                if (inferredReturn.empty()) inferredReturn = t;
+                else if (inferredReturn != t)
+                    error("ambiguous return type: '" + inferredReturn + "' and '" + t +
+                          "' — please specify return type with '->'", n->line, n->column);
                 break;
             }
 
             case NodeType::IF_STMT: {
                 auto* n = static_cast<IfStmt*>(node);
-                std::string condType = inferType(n->condition.get());
-                if (condType != "bool")
-                    error("if condition must be a bool, got '" + condType + "'",
-                          n->line, n->column);
                 analyzeBlock(n->thenBlock.get(), inferredReturn);
-                if (n->elseBlock)
-                    analyzeBlock(n->elseBlock.get(), inferredReturn);
+                if (n->elseBlock) analyzeBlock(n->elseBlock.get(), inferredReturn);
                 break;
             }
 
             case NodeType::WHILE_STMT: {
                 auto* n = static_cast<WhileStmt*>(node);
-                std::string condType = inferType(n->condition.get());
-                if (condType != "bool")
-                    error("while condition must be a bool, got '" + condType + "'",
-                          n->line, n->column);
                 analyzeBlock(n->body.get(), inferredReturn);
                 break;
             }
@@ -181,20 +171,15 @@ private:
             case NodeType::FOR_STMT: {
                 auto* n = static_cast<ForStmt*>(node);
                 analyzeStatement(n->init.get(), inferredReturn);
-                std::string condType = inferType(n->condition.get());
-                if (condType != "bool")
-                    error("for condition must be a bool, got '" + condType + "'",
-                          n->line, n->column);
                 analyzeStatement(n->increment.get(), inferredReturn);
                 analyzeBlock(n->body.get(), inferredReturn);
                 break;
             }
 
-            // Appel de fonction seul (sans récupérer la valeur)
-            case NodeType::CALL_EXPR: {
+            case NodeType::CALL_EXPR:
+            case NodeType::MEMBER_ACCESS:
                 inferType(node);
                 break;
-            }
 
             default:
                 break;
@@ -208,44 +193,66 @@ private:
     }
 
     void analyzeFuncDecl(FuncDecl* func) {
-        // Sauvegarde les variables existantes (portée locale)
         auto savedVars = variables;
+        auto savedObjs = objectTypes;
 
-        // Ajoute les paramètres comme variables locales
         for (auto& param : func->params)
             variables[param.name] = { param.typeName };
 
-        // Analyse le corps et infère le type de retour
         std::string inferredReturn = "";
         analyzeBlock(func->body.get(), inferredReturn);
 
-        // Si le type de retour est explicite, vérifie la cohérence
-        if (!func->returnType.empty() && !inferredReturn.empty()) {
-            if (func->returnType != inferredReturn)
-                error("function '" + func->name + "' declares return type '" +
-                      func->returnType + "' but returns '" + inferredReturn + "'",
-                      func->line, func->column);
-        }
-
-        // Met à jour le type de retour dans la table des fonctions
         functions[func->name].returnType = func->returnType.empty()
             ? inferredReturn : func->returnType;
 
-        // Restaure les variables de la portée parente
         variables = savedVars;
+        objectTypes = savedObjs;
+    }
+
+    void analyzeClassDecl(ClassDecl* cls) {
+        ClassInfo info;
+        info.parent = cls->parent;
+
+        // Enregistre les champs
+        for (auto& field : cls->fields) {
+            std::string fieldType = "int"; // type par défaut
+            if (field.defaultValue) {
+                // On infère le type de la valeur par défaut
+                switch (field.defaultValue->type) {
+                    case NodeType::INT_LITERAL:    fieldType = "int"; break;
+                    case NodeType::FLOAT_LITERAL:  fieldType = "float"; break;
+                    case NodeType::STRING_LITERAL: fieldType = "string"; break;
+                    case NodeType::BOOL_LITERAL:   fieldType = "bool"; break;
+                    default: break;
+                }
+            }
+            info.fields[field.name] = { fieldType, field.isPublic };
+        }
+
+        // Enregistre les méthodes
+        for (auto& method : cls->methods) {
+            FuncInfo mInfo;
+            mInfo.returnType = method->returnType;
+            for (auto& p : method->params)
+                mInfo.paramTypes.push_back(p.typeName);
+            info.methods[method->name] = mInfo;
+        }
+
+        classes[cls->name] = info;
     }
 
 public:
     void analyze(Node* program) {
         auto* prog = static_cast<Program*>(program);
 
-        // Fonctions built-in
-        functions["print"] = { "void", { "int" } };
-        functions["input"] = { "int", {} }; // <- NOUVEAU : pas de paramètres, retourne un int
+        functions["print"] = { "void", {} };
+        functions["input"] = { "int",  {} };
 
-        // Première passe : enregistre toutes les fonctions
+        // Première passe : enregistre classes et fonctions
         for (auto& decl : prog->declarations) {
-            if (decl->type == NodeType::FUNC_DECL) {
+            if (decl->type == NodeType::CLASS_DECL) {
+                analyzeClassDecl(static_cast<ClassDecl*>(decl.get()));
+            } else if (decl->type == NodeType::FUNC_DECL) {
                 auto* func = static_cast<FuncDecl*>(decl.get());
                 FuncInfo info;
                 info.returnType = func->returnType;
